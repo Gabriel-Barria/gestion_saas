@@ -96,6 +96,9 @@ BASE_TEMPLATE = """
                 <a href="/panel/users" class="{nav_users}">
                     <i class="fas fa-users me-2"></i> Usuarios
                 </a>
+                <a href="/panel/accept" class="{nav_accept}">
+                    <i class="fas fa-envelope-open me-2"></i> Aceptar Invitación
+                </a>
                 <hr class="bg-secondary my-2">
                 <a href="/docs" target="_blank" class="text-secondary small">
                     <i class="fas fa-book me-2"></i> API Docs
@@ -224,6 +227,7 @@ async def list_projects(request: Request, db: AsyncSession = Depends(get_db)):
         title="Proyectos",
         nav_projects="active",
         nav_users="",
+        nav_accept="",
         content=content
     )
     return HTMLResponse(content=html)
@@ -293,6 +297,7 @@ async def create_project_form(request: Request):
         title="Nuevo Proyecto",
         nav_projects="active",
         nav_users="",
+        nav_accept="",
         content=content
     )
     return HTMLResponse(content=html)
@@ -437,6 +442,7 @@ async def list_users(request: Request, db: AsyncSession = Depends(get_db)):
         title="Usuarios",
         nav_projects="",
         nav_users="active",
+        nav_accept="",
         content=content
     )
     return HTMLResponse(content=html)
@@ -571,6 +577,333 @@ async def view_user(request: Request, user_id: str, db: AsyncSession = Depends(g
         title=user.full_name,
         nav_projects="",
         nav_users="active",
+        nav_accept="",
+        content=content
+    )
+    return HTMLResponse(content=html)
+
+
+# ============================================================================
+# Accept Invitation Routes (MUST be before /{project_id} to avoid route conflict)
+# ============================================================================
+
+@router.get("/accept", response_class=HTMLResponse)
+async def accept_invitation_form(request: Request):
+    """Show form to enter invitation token."""
+    token = request.query_params.get("token", "")
+    error = request.query_params.get("error", "")
+
+    error_html = ""
+    if error:
+        error_html = f"""
+        <div class="alert alert-danger">
+            <i class="fas fa-exclamation-circle me-2"></i> {error}
+        </div>
+        """
+
+    content = f"""
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item active">Aceptar Invitación</li>
+        </ol>
+    </nav>
+
+    <div class="card" style="max-width: 500px; margin: 0 auto;">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="fas fa-envelope-open me-2"></i> Aceptar Invitación</h5>
+        </div>
+        <div class="card-body">
+            {error_html}
+            <form method="GET" action="/panel/accept/verify">
+                <div class="mb-3">
+                    <label class="form-label">Token de Invitación *</label>
+                    <input type="text" name="token" class="form-control" required
+                           value="{token}" placeholder="Pega aquí el token de invitación">
+                    <div class="form-text">El token fue generado cuando se creó la invitación</div>
+                </div>
+                <button type="submit" class="btn btn-primary w-100">
+                    <i class="fas fa-search me-2"></i> Verificar Invitación
+                </button>
+            </form>
+        </div>
+    </div>
+    """
+
+    html = BASE_TEMPLATE.format(
+        title="Aceptar Invitación",
+        nav_projects="",
+        nav_users="",
+        nav_accept="active",
+        content=content
+    )
+    return HTMLResponse(content=html)
+
+
+@router.get("/accept/verify", response_class=HTMLResponse)
+async def verify_invitation(request: Request, db: AsyncSession = Depends(get_db)):
+    """Verify invitation token and show acceptance form."""
+    from app.services.membership import MembershipService
+
+    token = request.query_params.get("token", "").strip()
+
+    if not token:
+        return RedirectResponse(url="/panel/accept?error=Token requerido", status_code=302)
+
+    service = MembershipService(db)
+    invitation = await service.get_invitation_by_token(token)
+
+    if not invitation:
+        return RedirectResponse(url="/panel/accept?error=Invitación no encontrada", status_code=302)
+
+    if invitation.is_used:
+        return RedirectResponse(url="/panel/accept?error=Esta invitación ya fue utilizada", status_code=302)
+
+    if invitation.is_expired:
+        return RedirectResponse(url="/panel/accept?error=Esta invitación ha expirado", status_code=302)
+
+    # Check if user exists
+    result = await db.execute(
+        select(User).where(User.email.ilike(invitation.email))
+    )
+    existing_user = result.scalar_one_or_none()
+
+    roles_badges = " ".join([f'<span class="badge bg-primary">{r}</span>' for r in invitation.roles]) or '<span class="text-muted">Sin roles asignados</span>'
+
+    # Form fields depend on whether user exists
+    if existing_user:
+        user_fields = f"""
+        <div class="alert alert-info">
+            <i class="fas fa-info-circle me-2"></i>
+            Ya existe una cuenta con este email. Se agregará la membresía automáticamente.
+        </div>
+        <input type="hidden" name="user_exists" value="1">
+        """
+    else:
+        user_fields = """
+        <div class="alert alert-warning">
+            <i class="fas fa-user-plus me-2"></i>
+            No existe una cuenta con este email. Se creará una nueva cuenta.
+        </div>
+        <div class="mb-3">
+            <label class="form-label">Nombre Completo *</label>
+            <input type="text" name="full_name" class="form-control" required
+                   placeholder="Tu nombre completo">
+        </div>
+        <div class="mb-3">
+            <label class="form-label">Contraseña *</label>
+            <input type="password" name="password" class="form-control" required
+                   minlength="8" placeholder="Mínimo 8 caracteres">
+        </div>
+        <div class="mb-3">
+            <label class="form-label">Confirmar Contraseña *</label>
+            <input type="password" name="password_confirm" class="form-control" required
+                   minlength="8" placeholder="Repite la contraseña">
+        </div>
+        """
+
+    content = f"""
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/panel/accept">Aceptar Invitación</a></li>
+            <li class="breadcrumb-item active">Confirmar</li>
+        </ol>
+    </nav>
+
+    <div class="card" style="max-width: 600px; margin: 0 auto;">
+        <div class="card-header bg-success text-white">
+            <h5 class="mb-0"><i class="fas fa-check-circle me-2"></i> Invitación Válida</h5>
+        </div>
+        <div class="card-body">
+            <div class="row g-3 mb-4">
+                <div class="col-md-6">
+                    <div class="card card-stats primary">
+                        <div class="card-body">
+                            <h6 class="text-muted">Proyecto</h6>
+                            <strong>{invitation.tenant.project.name}</strong>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card card-stats success">
+                        <div class="card-body">
+                            <h6 class="text-muted">Tenant</h6>
+                            <strong>{invitation.tenant.name}</strong>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card card-stats info">
+                        <div class="card-body">
+                            <h6 class="text-muted">Email</h6>
+                            <strong>{invitation.email}</strong>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card card-stats info">
+                        <div class="card-body">
+                            <h6 class="text-muted">Roles</h6>
+                            {roles_badges}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <hr>
+
+            <form method="POST" action="/panel/accept/confirm">
+                <input type="hidden" name="token" value="{token}">
+
+                {user_fields}
+
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-success flex-grow-1">
+                        <i class="fas fa-check me-2"></i> Aceptar Invitación
+                    </button>
+                    <a href="/panel/accept" class="btn btn-outline-secondary">Cancelar</a>
+                </div>
+            </form>
+        </div>
+    </div>
+    """
+
+    html = BASE_TEMPLATE.format(
+        title="Confirmar Invitación",
+        nav_projects="",
+        nav_users="",
+        nav_accept="active",
+        content=content
+    )
+    return HTMLResponse(content=html)
+
+
+@router.post("/accept/confirm")
+async def confirm_invitation(request: Request, db: AsyncSession = Depends(get_db)):
+    """Process invitation acceptance."""
+    from app.services.membership import MembershipService
+    from app.core.exceptions import NotFoundError, BadRequestError
+
+    form = await request.form()
+    token = form.get("token", "").strip()
+    password = form.get("password", "").strip() or None
+    password_confirm = form.get("password_confirm", "").strip() or None
+    full_name = form.get("full_name", "").strip() or None
+    user_exists = form.get("user_exists") == "1"
+
+    # Validate passwords match for new users
+    if not user_exists:
+        if password != password_confirm:
+            return RedirectResponse(
+                url=f"/panel/accept/verify?token={token}&error=Las contraseñas no coinciden",
+                status_code=302
+            )
+        if len(password or "") < 8:
+            return RedirectResponse(
+                url=f"/panel/accept/verify?token={token}&error=La contraseña debe tener al menos 8 caracteres",
+                status_code=302
+            )
+
+    service = MembershipService(db)
+
+    try:
+        user, membership = await service.accept_invitation(
+            token=token,
+            password=password,
+            full_name=full_name,
+        )
+
+        # Redirect to success page
+        return RedirectResponse(
+            url=f"/panel/accept/success?user_id={user.id}&membership_id={membership.id}",
+            status_code=302
+        )
+    except NotFoundError as e:
+        return RedirectResponse(url=f"/panel/accept?error={str(e)}", status_code=302)
+    except BadRequestError as e:
+        return RedirectResponse(url=f"/panel/accept?error={str(e)}", status_code=302)
+    except Exception as e:
+        return RedirectResponse(url=f"/panel/accept?error=Error inesperado: {str(e)}", status_code=302)
+
+
+@router.get("/accept/success", response_class=HTMLResponse)
+async def invitation_success(request: Request, db: AsyncSession = Depends(get_db)):
+    """Show success page after accepting invitation."""
+    user_id = request.query_params.get("user_id")
+    membership_id = request.query_params.get("membership_id")
+
+    if not user_id or not membership_id:
+        return RedirectResponse(url="/panel/accept", status_code=302)
+
+    try:
+        user_uuid = uuid.UUID(user_id)
+        membership_uuid = uuid.UUID(membership_id)
+    except ValueError:
+        return RedirectResponse(url="/panel/accept", status_code=302)
+
+    # Get user
+    result = await db.execute(select(User).where(User.id == user_uuid))
+    user = result.scalar_one_or_none()
+
+    # Get membership with tenant and project
+    result = await db.execute(
+        select(Membership)
+        .options(selectinload(Membership.tenant).selectinload(Tenant.project))
+        .where(Membership.id == membership_uuid)
+    )
+    membership = result.scalar_one_or_none()
+
+    if not user or not membership:
+        return RedirectResponse(url="/panel/accept", status_code=302)
+
+    roles_badges = " ".join([f'<span class="badge bg-primary">{r}</span>' for r in membership.roles]) or '<span class="text-muted">Sin roles</span>'
+
+    content = f"""
+    <div class="text-center py-5">
+        <div class="mb-4">
+            <i class="fas fa-check-circle text-success" style="font-size: 5rem;"></i>
+        </div>
+        <h2 class="mb-3">¡Invitación Aceptada!</h2>
+        <p class="text-muted mb-4">Se ha creado la membresía exitosamente</p>
+
+        <div class="card" style="max-width: 500px; margin: 0 auto;">
+            <div class="card-body text-start">
+                <table class="table table-borderless mb-0">
+                    <tr>
+                        <td class="text-muted">Usuario:</td>
+                        <td><strong>{user.full_name}</strong> ({user.email})</td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Proyecto:</td>
+                        <td><strong>{membership.tenant.project.name}</strong></td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Tenant:</td>
+                        <td><strong>{membership.tenant.name}</strong></td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Roles:</td>
+                        <td>{roles_badges}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="mt-4">
+            <a href="/panel/users/{user.id}" class="btn btn-primary me-2">
+                <i class="fas fa-user me-2"></i> Ver Usuario
+            </a>
+            <a href="/panel/{membership.tenant.project_id}/tenants/{membership.tenant_id}" class="btn btn-outline-primary">
+                <i class="fas fa-building me-2"></i> Ver Tenant
+            </a>
+        </div>
+    </div>
+    """
+
+    html = BASE_TEMPLATE.format(
+        title="Invitación Aceptada",
+        nav_projects="",
+        nav_users="",
+        nav_accept="active",
         content=content
     )
     return HTMLResponse(content=html)
@@ -773,6 +1106,7 @@ curl -X POST http://localhost:8000/api/v1/auth/verify \\
         title=project.name,
         nav_projects="active",
         nav_users="",
+        nav_accept="",
         content=content
     )
     return HTMLResponse(content=html)
@@ -840,6 +1174,7 @@ async def create_tenant_form(request: Request, project_id: str, db: AsyncSession
         title=f"Nuevo Tenant - {project.name}",
         nav_projects="active",
         nav_users="",
+        nav_accept="",
         content=content
     )
     return HTMLResponse(content=html)
@@ -1153,6 +1488,7 @@ async def view_tenant(request: Request, project_id: str, tenant_id: str, db: Asy
         title=f"{tenant.name} - {tenant.project.name}",
         nav_projects="active",
         nav_users="",
+        nav_accept="",
         content=content
     )
     return HTMLResponse(content=html)
