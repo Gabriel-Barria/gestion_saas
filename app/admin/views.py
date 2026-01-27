@@ -4,17 +4,15 @@ from sqladmin import BaseView, expose
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, HTMLResponse
 from sqlalchemy import select, func
-from sqlalchemy.orm import selectinload
 
 from app.models.project import Project
 from app.models.tenant import Tenant
-from app.models.user import User
 from app.core.security import (
     generate_api_key,
     generate_client_id,
     generate_client_secret,
     generate_jwt_secret,
-    hash_password,
+    hash_secret,
 )
 from slugify import slugify as python_slugify
 from app.database import async_session_maker
@@ -263,9 +261,9 @@ class ProjectsView(BaseView):
                         name=name,
                         slug=slug,
                         tenant_strategy=tenant_strategy,
-                        api_key_hash=hash_password(api_key),
+                        api_key_hash=hash_secret(api_key),
                         client_id=client_id,
-                        client_secret_hash=hash_password(client_secret),
+                        client_secret_hash=hash_secret(client_secret),
                         jwt_secret=jwt_secret,
                         jwt_algorithm=jwt_algorithm,
                         jwt_expiration_minutes=jwt_expiration,
@@ -383,14 +381,6 @@ class ProjectsView(BaseView):
             )
             tenants = tenants_result.scalars().all()
 
-            # Get user counts per tenant
-            user_counts = {}
-            for tenant in tenants:
-                count_result = await session.execute(
-                    select(func.count(User.id)).where(User.tenant_id == tenant.id)
-                )
-                user_counts[tenant.id] = count_result.scalar() or 0
-
         # Check for new credentials in session
         credentials_html = ""
         if show_credentials and "project_credentials" in request.session:
@@ -427,26 +417,19 @@ class ProjectsView(BaseView):
             tenants_html += f"""
             <tr>
                 <td>
-                    <a href="/admin/projects/{project_id}/tenants/{tenant.id}" class="fw-bold text-decoration-none">
-                        {tenant.name}
-                    </a>
+                    <strong>{tenant.name}</strong>
                     <br><small class="text-muted">{tenant.slug}</small>
                 </td>
                 <td><code>{tenant.schema_name or 'N/A'}</code></td>
-                <td>{user_counts.get(tenant.id, 0)}</td>
                 <td>{status_badge}</td>
-                <td>
-                    <a href="/admin/projects/{project_id}/tenants/{tenant.id}" class="btn btn-sm btn-outline-primary">
-                        <i class="fas fa-eye"></i> Ver
-                    </a>
-                </td>
+                <td>{tenant.created_at.strftime('%Y-%m-%d %H:%M')}</td>
             </tr>
             """
 
         if not tenants:
             tenants_html = """
             <tr>
-                <td colspan="5" class="text-center py-4">
+                <td colspan="4" class="text-center py-4">
                     <p class="text-muted mb-2">No hay tenants en este proyecto</p>
                 </td>
             </tr>
@@ -511,23 +494,19 @@ class ProjectsView(BaseView):
                 <h6 class="mb-0"><i class="fas fa-code me-2"></i> Ejemplo de Uso</h6>
             </div>
             <div class="card-body">
-                <pre class="bg-dark text-light p-3 rounded mb-0"><code># Obtener token (reemplaza API_KEY con tu API Key)
-curl -X POST http://localhost:8000/api/v1/auth/token \\
+                <pre class="bg-dark text-light p-3 rounded mb-0"><code># 1. Obtener configuración del proyecto (JWT secret para firmar tokens)
+curl -X GET http://localhost:8000/api/v1/auth/project \\
+  -H "X-API-Key: TU_API_KEY"
+
+# 2. Obtener info de un tenant
+curl -X GET http://localhost:8000/api/v1/auth/tenant/mi-tenant \\
+  -H "X-API-Key: TU_API_KEY"
+
+# 3. Verificar un JWT firmado
+curl -X POST http://localhost:8000/api/v1/auth/verify \\
   -H "X-API-Key: TU_API_KEY" \\
   -H "Content-Type: application/json" \\
-  -d '{{"email": "usuario@ejemplo.com", "password": "pass", "tenant_slug": "mi-tenant"}}'
-
-# O usar OAuth2
-curl -X POST http://localhost:8000/api/v1/auth/oauth/token \\
-  -H "Content-Type: application/json" \\
-  -d '{{
-    "grant_type": "password",
-    "client_id": "{project.client_id}",
-    "client_secret": "TU_CLIENT_SECRET",
-    "username": "usuario@ejemplo.com",
-    "password": "pass",
-    "tenant": "mi-tenant"
-  }}'</code></pre>
+  -d '{{"token": "eyJhbG..."}}'</code></pre>
             </div>
         </div>
 
@@ -545,9 +524,8 @@ curl -X POST http://localhost:8000/api/v1/auth/oauth/token \\
                         <tr>
                             <th>Nombre</th>
                             <th>Schema</th>
-                            <th>Usuarios</th>
                             <th>Estado</th>
-                            <th>Acciones</th>
+                            <th>Creado</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -555,6 +533,12 @@ curl -X POST http://localhost:8000/api/v1/auth/oauth/token \\
                     </tbody>
                 </table>
             </div>
+        </div>
+
+        <div class="alert alert-info mt-4">
+            <i class="fas fa-info-circle"></i>
+            <strong>Nota:</strong> Los usuarios se gestionan en tu proyecto SaaS, no aquí.
+            Este servicio solo proporciona el JWT secret para que tu aplicación firme tokens.
         </div>
         """
 
@@ -676,313 +660,6 @@ curl -X POST http://localhost:8000/api/v1/auth/oauth/token \\
 
         html = BASE_TEMPLATE.format(
             title=f"Nuevo Tenant - {project.name}",
-            nav_projects="active",
-            content=content
-        )
-        return HTMLResponse(content=html)
-
-    @expose("/{project_id}/tenants/{tenant_id}", methods=["GET"])
-    async def view_tenant(self, request: Request) -> HTMLResponse:
-        """View a tenant with its users."""
-        project_id = request.path_params["project_id"]
-        tenant_id = request.path_params["tenant_id"]
-
-        # Validate UUID format
-        try:
-            project_uuid = uuid.UUID(project_id)
-            tenant_uuid = uuid.UUID(tenant_id)
-        except ValueError:
-            return RedirectResponse(url="/admin/projects/", status_code=302)
-
-        async with async_session_maker() as session:
-            # Get project
-            project_result = await session.execute(
-                select(Project).where(Project.id == project_uuid)
-            )
-            project = project_result.scalar_one_or_none()
-
-            if not project:
-                return RedirectResponse(url="/admin/projects/", status_code=302)
-
-            # Get tenant
-            tenant_result = await session.execute(
-                select(Tenant).where(Tenant.id == tenant_uuid)
-            )
-            tenant = tenant_result.scalar_one_or_none()
-
-            if not tenant:
-                return RedirectResponse(url=f"/admin/projects/{project_id}", status_code=302)
-
-            # Get users
-            users_result = await session.execute(
-                select(User)
-                .where(User.tenant_id == tenant_uuid)
-                .order_by(User.created_at.desc())
-            )
-            users = users_result.scalars().all()
-
-        # Check for new user credentials
-        user_credentials_html = ""
-        if "new_user_password" in request.session:
-            user_info = request.session.pop("new_user_password", {})
-            if user_info.get("tenant_id") == tenant_id:
-                user_credentials_html = f"""
-                <div class="alert alert-warning mb-4">
-                    <h5><i class="fas fa-key"></i> Usuario Creado</h5>
-                    <p>Email: <strong>{user_info['email']}</strong></p>
-                    <p>Password temporal: <code>{user_info['password']}</code></p>
-                    <small class="text-muted">El usuario debe cambiar esta contraseña al iniciar sesión.</small>
-                </div>
-                """
-
-        # Users table
-        users_html = ""
-        for user in users:
-            status_badge = '<span class="badge bg-success">Activo</span>' if user.is_active else '<span class="badge bg-secondary">Inactivo</span>'
-            roles = ", ".join(user.roles) if user.roles else "Sin roles"
-            users_html += f"""
-            <tr>
-                <td>
-                    <strong>{user.email}</strong>
-                    <br><small class="text-muted">{user.full_name or 'Sin nombre'}</small>
-                </td>
-                <td><span class="badge bg-secondary">{roles}</span></td>
-                <td>{status_badge}</td>
-                <td>{user.created_at.strftime('%Y-%m-%d %H:%M')}</td>
-            </tr>
-            """
-
-        if not users:
-            users_html = """
-            <tr>
-                <td colspan="4" class="text-center py-4">
-                    <p class="text-muted mb-0">No hay usuarios en este tenant</p>
-                </td>
-            </tr>
-            """
-
-        status_badge = '<span class="badge bg-success">Activo</span>' if tenant.is_active else '<span class="badge bg-secondary">Inactivo</span>'
-
-        content = f"""
-        <nav aria-label="breadcrumb">
-            <ol class="breadcrumb">
-                <li class="breadcrumb-item"><a href="/admin/projects/">Proyectos</a></li>
-                <li class="breadcrumb-item"><a href="/admin/projects/{project_id}">{project.name}</a></li>
-                <li class="breadcrumb-item active">{tenant.name}</li>
-            </ol>
-        </nav>
-
-        {user_credentials_html}
-
-        <div class="d-flex justify-content-between align-items-start mb-4">
-            <div>
-                <h2><i class="fas fa-building me-2"></i> {tenant.name}</h2>
-                <p class="text-muted mb-0">Slug: <code>{tenant.slug}</code></p>
-            </div>
-            <div>
-                {status_badge}
-            </div>
-        </div>
-
-        <!-- Tenant Info -->
-        <div class="row g-3 mb-4">
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-body">
-                        <h6 class="text-muted">Schema</h6>
-                        <code>{tenant.schema_name or 'N/A (discriminator)'}</code>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-body">
-                        <h6 class="text-muted">Proyecto</h6>
-                        <a href="/admin/projects/{project_id}">{project.name}</a>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-body">
-                        <h6 class="text-muted">Creado</h6>
-                        {tenant.created_at.strftime('%Y-%m-%d %H:%M')}
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Users Section -->
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="fas fa-users me-2"></i> Usuarios</h5>
-                <a href="/admin/projects/{project_id}/tenants/{tenant_id}/users/create" class="btn btn-sm btn-primary">
-                    <i class="fas fa-plus"></i> Nuevo Usuario
-                </a>
-            </div>
-            <div class="card-body">
-                <table class="table table-hover">
-                    <thead>
-                        <tr>
-                            <th>Email / Nombre</th>
-                            <th>Roles</th>
-                            <th>Estado</th>
-                            <th>Creado</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {users_html}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        """
-
-        html = BASE_TEMPLATE.format(
-            title=f"{tenant.name} - {project.name}",
-            nav_projects="active",
-            content=content
-        )
-        return HTMLResponse(content=html)
-
-    @expose("/{project_id}/tenants/{tenant_id}/users/create", methods=["GET", "POST"])
-    async def create_user(self, request: Request) -> HTMLResponse:
-        """Create a user for a tenant."""
-        project_id = request.path_params["project_id"]
-        tenant_id = request.path_params["tenant_id"]
-
-        # Validate UUID format
-        try:
-            project_uuid = uuid.UUID(project_id)
-            tenant_uuid = uuid.UUID(tenant_id)
-        except ValueError:
-            return RedirectResponse(url="/admin/projects/", status_code=302)
-
-        async with async_session_maker() as session:
-            # Get project
-            project_result = await session.execute(
-                select(Project).where(Project.id == project_uuid)
-            )
-            project = project_result.scalar_one_or_none()
-
-            if not project:
-                return RedirectResponse(url="/admin/projects/", status_code=302)
-
-            # Get tenant
-            tenant_result = await session.execute(
-                select(Tenant).where(Tenant.id == tenant_uuid)
-            )
-            tenant = tenant_result.scalar_one_or_none()
-
-            if not tenant:
-                return RedirectResponse(url=f"/admin/projects/{project_id}", status_code=302)
-
-        error = None
-
-        if request.method == "POST":
-            form = await request.form()
-            email = form.get("email", "").strip()
-            full_name = form.get("full_name", "").strip()
-            roles_str = form.get("roles", "").strip()
-
-            if not email:
-                error = "El email es requerido"
-            else:
-                roles = [r.strip() for r in roles_str.split(",") if r.strip()] if roles_str else []
-                default_password = "changeme123"
-
-                async with async_session_maker() as session:
-                    # Check if email exists in this tenant
-                    existing = await session.execute(
-                        select(User).where(
-                            User.tenant_id == uuid.UUID(tenant_id),
-                            User.email == email
-                        )
-                    )
-                    if existing.scalar_one_or_none():
-                        error = "Ya existe un usuario con ese email en este tenant"
-                    else:
-                        user = User(
-                            tenant_id=uuid.UUID(tenant_id),
-                            email=email,
-                            full_name=full_name or None,
-                            password_hash=hash_password(default_password),
-                            roles=roles,
-                        )
-                        session.add(user)
-                        await session.commit()
-
-                        # Store password to show
-                        request.session["new_user_password"] = {
-                            "tenant_id": tenant_id,
-                            "email": email,
-                            "password": default_password,
-                        }
-
-                        return RedirectResponse(
-                            url=f"/admin/projects/{project_id}/tenants/{tenant_id}",
-                            status_code=302
-                        )
-
-        error_html = f'<div class="alert alert-danger">{error}</div>' if error else ""
-
-        content = f"""
-        <nav aria-label="breadcrumb">
-            <ol class="breadcrumb">
-                <li class="breadcrumb-item"><a href="/admin/projects/">Proyectos</a></li>
-                <li class="breadcrumb-item"><a href="/admin/projects/{project_id}">{project.name}</a></li>
-                <li class="breadcrumb-item"><a href="/admin/projects/{project_id}/tenants/{tenant_id}">{tenant.name}</a></li>
-                <li class="breadcrumb-item active">Nuevo Usuario</li>
-            </ol>
-        </nav>
-
-        <div class="card" style="max-width: 500px;">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="fas fa-user-plus me-2"></i> Crear Usuario en {tenant.name}</h5>
-            </div>
-            <div class="card-body">
-                {error_html}
-                <form method="POST">
-                    <div class="mb-3">
-                        <label class="form-label">Email *</label>
-                        <input type="email" name="email" class="form-control" required
-                               placeholder="usuario@ejemplo.com">
-                    </div>
-
-                    <div class="mb-3">
-                        <label class="form-label">Nombre Completo</label>
-                        <input type="text" name="full_name" class="form-control"
-                               placeholder="Juan Pérez">
-                    </div>
-
-                    <div class="mb-3">
-                        <label class="form-label">Roles</label>
-                        <input type="text" name="roles" class="form-control"
-                               placeholder="admin, user">
-                        <div class="form-text">Separados por coma</div>
-                    </div>
-
-                    <div class="alert alert-info">
-                        <small>
-                            <i class="fas fa-info-circle"></i>
-                            Se asignará la contraseña temporal <code>changeme123</code>
-                        </small>
-                    </div>
-
-                    <hr>
-                    <div class="d-flex gap-2">
-                        <button type="submit" class="btn btn-primary">
-                            <i class="fas fa-save"></i> Crear Usuario
-                        </button>
-                        <a href="/admin/projects/{project_id}/tenants/{tenant_id}" class="btn btn-outline-secondary">Cancelar</a>
-                    </div>
-                </form>
-            </div>
-        </div>
-        """
-
-        html = BASE_TEMPLATE.format(
-            title=f"Nuevo Usuario - {tenant.name}",
             nav_projects="active",
             content=content
         )
