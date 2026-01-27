@@ -4,7 +4,7 @@ from starlette.requests import Request
 
 from app.database import engine
 from app.config import settings
-from app.admin.views import ProjectAdmin, TenantAdmin, UserAdmin
+from app.admin.views import ProjectsView
 
 
 class AdminAuth(AuthenticationBackend):
@@ -39,9 +39,7 @@ def setup_admin(app) -> Admin:
         base_url="/admin",
     )
 
-    # Register model views
-    admin.add_view(ProjectAdmin)
-    admin.add_view(TenantAdmin)
-    admin.add_view(UserAdmin)
+    # Register the custom projects view
+    admin.add_view(ProjectsView)
 
     return admin

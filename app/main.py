@@ -6,7 +6,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import settings
 from app.api.v1.router import api_router
-from app.admin import setup_admin
+from app.admin.routes import router as panel_router
 
 
 @asynccontextmanager
@@ -27,6 +27,9 @@ API para gestionar proyectos SaaS multi-tenant con autenticación centralizada.
 - **Gestión de Proyectos**: Crear y administrar proyectos SaaS
 - **Multi-tenancy**: Soporte para aislamiento por schema o columna discriminadora
 - **Autenticación Centralizada**: JWT con API Keys y OAuth2
+
+### Panel de Administración
+Accede a `/panel/` para gestionar proyectos, tenants y usuarios.
 
 ### Flujos de Autenticación:
 
@@ -61,7 +64,7 @@ Body: { "token": "<jwt_token>" }
     lifespan=lifespan,
 )
 
-# Session middleware (required for admin authentication)
+# Session middleware (required for admin panel)
 app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
 
 # CORS middleware
@@ -73,8 +76,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Setup Admin Panel
-admin = setup_admin(app)
+# Include Panel router (admin panel)
+app.include_router(panel_router)
 
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
@@ -93,6 +96,6 @@ async def root():
         "service": settings.APP_NAME,
         "version": "1.0.0",
         "docs": "/docs",
-        "admin": "/admin",
+        "panel": "/panel/",
         "health": "/health",
     }

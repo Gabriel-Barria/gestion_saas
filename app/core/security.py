@@ -1,4 +1,5 @@
 import secrets
+import hashlib
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -16,8 +17,19 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def hash_password(password: str) -> str:
-    """Hash a password."""
-    return pwd_context.hash(password)
+    """Hash a password using bcrypt (for short passwords like user passwords)."""
+    # Truncate to 72 bytes for bcrypt compatibility
+    return pwd_context.hash(password[:72])
+
+
+def hash_secret(secret: str) -> str:
+    """Hash an API key or secret using SHA256 (for longer secrets)."""
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+
+def verify_secret(secret: str, hashed_secret: str) -> bool:
+    """Verify a secret against its SHA256 hash."""
+    return hashlib.sha256(secret.encode()).hexdigest() == hashed_secret
 
 
 def generate_api_key() -> str:
@@ -90,9 +102,9 @@ def decode_token(
 
 def verify_api_key(api_key: str, api_key_hash: str) -> bool:
     """Verify an API key against its hash."""
-    return pwd_context.verify(api_key, api_key_hash)
+    return verify_secret(api_key, api_key_hash)
 
 
 def verify_client_secret(client_secret: str, client_secret_hash: str) -> bool:
     """Verify a client secret against its hash."""
-    return pwd_context.verify(client_secret, client_secret_hash)
+    return verify_secret(client_secret, client_secret_hash)
