@@ -292,6 +292,7 @@ class AuthService:
             "sub": str(user.id),
             "email": user.email,
             "tenant_id": str(tenant.id),
+            "tenant_slug": tenant.slug,
             "project_id": str(tenant.project_id),
             "roles": membership.roles,
         }

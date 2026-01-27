@@ -147,6 +147,7 @@ curl -X POST http://localhost:8000/api/v1/auth/verify \
   "sub": "user-uuid",
   "email": "usuario@ejemplo.com",
   "tenant_id": "tenant-uuid",
+  "tenant_slug": "mi-tenant",
   "project_id": "project-uuid",
   "roles": ["admin", "user"],
   "type": "access",
