@@ -89,11 +89,11 @@ class TenantService:
         )
         return list(result.scalars().all())
 
-    async def get_with_users(self, tenant_id: uuid.UUID) -> Tenant | None:
-        """Get a tenant with its users loaded."""
+    async def get_with_memberships(self, tenant_id: uuid.UUID) -> Tenant | None:
+        """Get a tenant with its memberships loaded."""
         result = await self.db.execute(
             select(Tenant)
-            .options(selectinload(Tenant.users))
+            .options(selectinload(Tenant.memberships))
             .where(Tenant.id == tenant_id)
         )
         return result.scalar_one_or_none()

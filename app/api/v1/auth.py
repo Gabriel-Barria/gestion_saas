@@ -2,13 +2,21 @@ from typing import Annotated
 
 from fastapi import APIRouter, Header
 
-from app.api.deps import AuthServiceDep, ApiKeyDep
+from app.api.deps import AuthServiceDep, MembershipServiceDep, ApiKeyDep
 from app.schemas.auth import (
     JWTVerifyRequest,
     JWTVerifyResponse,
     ProjectInfoResponse,
     TenantInfoResponse,
+    RegisterRequest,
+    RegisterResponse,
+    LoginRequest,
+    LoginResponse,
+    LoginTenantRequest,
+    TokenResponse,
+    RefreshRequest,
 )
+from app.schemas.membership import InvitationAccept, InvitationInfo
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -103,3 +111,161 @@ async def verify_jwt_bearer(
 
     token = parts[1]
     return await service.verify_jwt(api_key, token)
+
+
+# === Global Authentication Endpoints ===
+
+@router.post("/register", response_model=RegisterResponse)
+async def register(
+    data: RegisterRequest,
+    service: AuthServiceDep,
+):
+    """
+    Register a new user (global identity).
+
+    **This creates a user account without any tenant access.**
+
+    To access a tenant, the user must either:
+    - Be invited by a tenant admin
+    - Self-register to a tenant (if the SaaS allows it)
+
+    Returns:
+    - User ID, email, and full name
+    """
+    return await service.register(data)
+
+
+@router.post("/login", response_model=LoginResponse)
+async def login_global(
+    data: LoginRequest,
+    service: AuthServiceDep,
+):
+    """
+    Global login - authenticate user and get available tenants.
+
+    **This validates credentials and returns user info with all memberships.**
+
+    Use this to let users select which tenant they want to access,
+    then call `/auth/login/tenant` to get JWT tokens for that tenant.
+
+    Returns:
+    - User ID, email, full name
+    - List of memberships (tenants the user can access)
+    """
+    return await service.login_global(data)
+
+
+@router.post("/login/tenant", response_model=TokenResponse)
+async def login_tenant(
+    data: LoginTenantRequest,
+    service: AuthServiceDep,
+):
+    """
+    Login to a specific tenant - get JWT tokens.
+
+    **This validates credentials and membership, then returns JWT tokens.**
+
+    The access token includes:
+    - user ID (sub)
+    - email
+    - tenant_id
+    - project_id
+    - roles
+
+    Returns:
+    - access_token: Short-lived token for API calls
+    - refresh_token: Long-lived token to get new access tokens
+    - expires_in: Access token expiration in seconds
+    """
+    return await service.login_tenant(data)
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(
+    data: RefreshRequest,
+    service: AuthServiceDep,
+    x_api_key: Annotated[str | None, Header()] = None,
+):
+    """
+    Refresh access token using a refresh token.
+
+    **Use this to get a new access token without re-authenticating.**
+
+    Optionally provide `X-API-Key` header for additional security validation.
+
+    Returns:
+    - New access_token and refresh_token
+    """
+    return await service.refresh_token(data.refresh_token, x_api_key)
+
+
+@router.get("/invitations/{token}", response_model=InvitationInfo)
+async def get_invitation_info(
+    token: str,
+    membership_service: MembershipServiceDep,
+):
+    """
+    Get invitation details by token.
+
+    **Use this to show invitation info before accepting.**
+
+    Returns public info about the invitation (tenant name, roles, etc.)
+    and whether the user already has an account.
+    """
+    from app.core.exceptions import NotFoundError, BadRequestError
+
+    invitation = await membership_service.get_invitation_by_token(token)
+    if not invitation:
+        raise NotFoundError("Invitation not found")
+
+    if invitation.is_used:
+        raise BadRequestError("Invitation has already been used")
+
+    if invitation.is_expired:
+        raise BadRequestError("Invitation has expired")
+
+    # Check if user exists
+    user = await membership_service._get_user_by_email(invitation.email)
+
+    return InvitationInfo(
+        email=invitation.email,
+        tenant_name=invitation.tenant.name,
+        project_name=invitation.tenant.project.name,
+        roles=invitation.roles,
+        expires_at=invitation.expires_at,
+        user_exists=user is not None,
+    )
+
+
+@router.post("/invitations/accept")
+async def accept_invitation(
+    data: InvitationAccept,
+    membership_service: MembershipServiceDep,
+):
+    """
+    Accept an invitation and join a tenant.
+
+    **If the user doesn't exist, password and full_name are required.**
+
+    This will:
+    - Create the user account if needed (using provided password/name)
+    - Create the membership to the tenant
+    - Mark the invitation as used
+
+    Returns:
+    - User info and created membership
+    """
+    from app.schemas.user import UserResponse
+    from app.schemas.membership import MembershipResponse
+
+    user, membership = await membership_service.accept_invitation(
+        token=data.token,
+        password=data.password,
+        full_name=data.full_name,
+    )
+
+    return {
+        "user": UserResponse.model_validate(user),
+        "membership": MembershipResponse.model_validate(membership),
+        "message": "Invitation accepted successfully",
+    }

@@ -3,23 +3,25 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import Any
 
+import bcrypt
 from jose import jwt, JWTError
-from passlib.context import CryptContext
 
 from app.config import settings
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against a hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+    password_bytes = plain_password.encode("utf-8")[:72]
+    hash_bytes = hashed_password.encode("utf-8")
+    return bcrypt.checkpw(password_bytes, hash_bytes)
 
 
 def hash_password(password: str) -> str:
-    """Hash a password using bcrypt (for short passwords like user passwords)."""
-    # Truncate to 72 bytes for bcrypt compatibility
-    return pwd_context.hash(password[:72])
+    """Hash a password using bcrypt."""
+    password_bytes = password.encode("utf-8")[:72]
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password_bytes, salt)
+    return hashed.decode("utf-8")
 
 
 def hash_secret(secret: str) -> str:

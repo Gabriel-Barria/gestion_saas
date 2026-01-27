@@ -37,6 +37,12 @@ class Tenant(Base):
 
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="tenants")
+    memberships: Mapped[list["Membership"]] = relationship(
+        "Membership", back_populates="tenant", cascade="all, delete-orphan"
+    )
+    invitations: Mapped[list["Invitation"]] = relationship(
+        "Invitation", back_populates="tenant", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Tenant {self.name} ({self.slug})>"
