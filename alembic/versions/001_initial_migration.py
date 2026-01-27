@@ -18,24 +18,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Create tenant_strategy enum
-    tenant_strategy_enum = postgresql.ENUM(
-        "schema", "discriminator", name="tenantstrategy", create_type=False
-    )
-    tenant_strategy_enum.create(op.get_bind(), checkfirst=True)
-
     # Create projects table
     op.create_table(
         "projects",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("name", sa.String(255), nullable=False),
         sa.Column("slug", sa.String(255), nullable=False, unique=True, index=True),
-        sa.Column(
-            "tenant_strategy",
-            sa.Enum("schema", "discriminator", name="tenantstrategy"),
-            nullable=False,
-            server_default="schema",
-        ),
+        sa.Column("tenant_strategy", sa.String(50), nullable=False, server_default="schema"),
         sa.Column("api_key_hash", sa.String(255), nullable=False),
         sa.Column("client_id", sa.String(255), nullable=False, unique=True, index=True),
         sa.Column("client_secret_hash", sa.String(255), nullable=False),
@@ -101,9 +90,3 @@ def downgrade() -> None:
     op.drop_table("users")
     op.drop_table("tenants")
     op.drop_table("projects")
-
-    # Drop enum
-    tenant_strategy_enum = postgresql.ENUM(
-        "schema", "discriminator", name="tenantstrategy"
-    )
-    tenant_strategy_enum.drop(op.get_bind(), checkfirst=True)

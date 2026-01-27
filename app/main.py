@@ -2,9 +2,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import settings
 from app.api.v1.router import api_router
+from app.admin import setup_admin
 
 
 @asynccontextmanager
@@ -59,6 +61,9 @@ Body: { "token": "<jwt_token>" }
     lifespan=lifespan,
 )
 
+# Session middleware (required for admin authentication)
+app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -67,6 +72,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Setup Admin Panel
+admin = setup_admin(app)
 
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
@@ -85,5 +93,6 @@ async def root():
         "service": settings.APP_NAME,
         "version": "1.0.0",
         "docs": "/docs",
+        "admin": "/admin",
         "health": "/health",
     }

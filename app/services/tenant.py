@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.project import Project, TenantStrategy
+from app.models.project import Project
 from app.models.tenant import Tenant
 from app.schemas.tenant import TenantCreate, TenantUpdate
 from app.database import create_schema, drop_schema
@@ -33,7 +33,7 @@ class TenantService:
             slug = f"{slug}-{uuid.uuid4().hex[:8]}"
 
         schema_name = None
-        if project.tenant_strategy == TenantStrategy.SCHEMA:
+        if project.tenant_strategy == "schema":
             # Create a unique schema name
             schema_name = f"tenant_{project.slug}_{slug}".replace("-", "_")
             await create_schema(schema_name)

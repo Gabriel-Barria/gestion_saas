@@ -1,13 +1,15 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 from pydantic import BaseModel, Field
 
-from app.models.project import TenantStrategy
+
+TenantStrategyType = Literal["schema", "discriminator"]
 
 
 class ProjectBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
-    tenant_strategy: TenantStrategy = TenantStrategy.SCHEMA
+    tenant_strategy: TenantStrategyType = "schema"
 
 
 class ProjectCreate(ProjectBase):
@@ -16,7 +18,7 @@ class ProjectCreate(ProjectBase):
 
 class ProjectUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
-    tenant_strategy: TenantStrategy | None = None
+    tenant_strategy: TenantStrategyType | None = None
     is_active: bool | None = None
     jwt_algorithm: str | None = None
     jwt_expiration_minutes: int | None = Field(None, gt=0)
@@ -26,7 +28,7 @@ class ProjectResponse(BaseModel):
     id: uuid.UUID
     name: str
     slug: str
-    tenant_strategy: TenantStrategy
+    tenant_strategy: str
     client_id: str
     jwt_algorithm: str
     jwt_expiration_minutes: int

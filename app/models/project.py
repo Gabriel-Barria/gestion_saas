@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
 
-from sqlalchemy import String, Boolean, DateTime, Enum, Integer
+from sqlalchemy import String, Boolean, DateTime, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -23,9 +23,9 @@ class Project(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
 
-    # Tenant strategy configuration
-    tenant_strategy: Mapped[TenantStrategy] = mapped_column(
-        Enum(TenantStrategy), default=TenantStrategy.SCHEMA, nullable=False
+    # Tenant strategy configuration (stored as string, validated in code)
+    tenant_strategy: Mapped[str] = mapped_column(
+        String(50), default=TenantStrategy.SCHEMA.value, nullable=False
     )
 
     # API Key authentication
