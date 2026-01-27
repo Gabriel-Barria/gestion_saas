@@ -1,55 +1,38 @@
 import uuid
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field
 
 
-class TokenRequest(BaseModel):
-    """Request for token using API Key authentication."""
-    email: EmailStr
-    password: str
-    tenant_slug: str
-
-
-class OAuthTokenRequest(BaseModel):
-    """Request for token using OAuth2 client credentials."""
-    grant_type: str = Field(..., pattern="^(password|refresh_token)$")
-    client_id: str
-    client_secret: str
-    username: EmailStr | None = None  # Required for grant_type=password
-    password: str | None = None  # Required for grant_type=password
-    tenant: str | None = None  # Tenant slug
-    refresh_token: str | None = None  # Required for grant_type=refresh_token
-
-
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_in: int
-    refresh_token: str | None = None
-
-
-class TokenValidationRequest(BaseModel):
-    """Request to validate a token."""
+class JWTVerifyRequest(BaseModel):
+    """Request to verify a JWT signature."""
     token: str
 
 
-class TokenValidationResponse(BaseModel):
+class JWTVerifyResponse(BaseModel):
+    """Response from JWT verification."""
     valid: bool
-    user_id: uuid.UUID | None = None
-    email: str | None = None
-    tenant_id: uuid.UUID | None = None
-    tenant_slug: str | None = None
-    project_id: uuid.UUID | None = None
-    roles: list[str] = Field(default_factory=list)
-    message: str | None = None
+    payload: dict | None = None  # Decoded payload if valid
+    error: str | None = None
 
 
-class TokenPayload(BaseModel):
-    """JWT token payload structure."""
-    sub: str  # user_id
-    email: str
-    tenant_id: str
-    tenant_slug: str
-    project_id: str
-    roles: list[str] = Field(default_factory=list)
-    exp: int
-    iat: int
+class ProjectInfoResponse(BaseModel):
+    """Project info for SaaS clients (includes JWT secret for signing)."""
+    id: uuid.UUID
+    name: str
+    slug: str
+    tenant_strategy: str
+    jwt_secret: str  # For signing JWTs
+    jwt_algorithm: str
+    jwt_expiration_minutes: int
+
+    model_config = {"from_attributes": True}
+
+
+class TenantInfoResponse(BaseModel):
+    """Tenant info for SaaS clients."""
+    id: uuid.UUID
+    name: str
+    slug: str
+    schema_name: str | None = None
+    is_active: bool
+
+    model_config = {"from_attributes": True}

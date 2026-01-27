@@ -5,12 +5,11 @@ from app.schemas.project import (
     ProjectWithCredentials,
 )
 from app.schemas.tenant import TenantCreate, TenantUpdate, TenantResponse
-from app.schemas.user import UserCreate, UserUpdate, UserResponse
 from app.schemas.auth import (
-    TokenRequest,
-    TokenResponse,
-    OAuthTokenRequest,
-    TokenValidationResponse,
+    JWTVerifyRequest,
+    JWTVerifyResponse,
+    ProjectInfoResponse,
+    TenantInfoResponse,
 )
 
 __all__ = [
@@ -21,11 +20,8 @@ __all__ = [
     "TenantCreate",
     "TenantUpdate",
     "TenantResponse",
-    "UserCreate",
-    "UserUpdate",
-    "UserResponse",
-    "TokenRequest",
-    "TokenResponse",
-    "OAuthTokenRequest",
-    "TokenValidationResponse",
+    "JWTVerifyRequest",
+    "JWTVerifyResponse",
+    "ProjectInfoResponse",
+    "TenantInfoResponse",
 ]

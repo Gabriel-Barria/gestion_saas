@@ -1,140 +1,266 @@
-# Gestion SaaS - Servicio de Autenticación Centralizada
+# Gestion SaaS - Servicio de Gestión Multi-Tenant
 
-Sistema centralizado de autenticación para proyectos SaaS multi-tenant.
+Sistema centralizado para gestionar proyectos SaaS multi-tenant. Este servicio administra **Proyectos** y **Tenants**, proporcionando a cada proyecto SaaS las credenciales necesarias para implementar su propia autenticación.
 
-## Descripción
+## Arquitectura
 
-Este servicio proporciona autenticación centralizada para múltiples proyectos SaaS. Cada proyecto puede tener múltiples tenants (clientes), y cada tenant tiene sus propios usuarios.
+```
+┌─────────────────────────────────────────────────────────┐
+│                    GESTION SAAS                         │
+│           (Este servicio - gestión central)             │
+├─────────────────────────────────────────────────────────┤
+│  Panel de Gestión (/panel/)                             │
+│  └── Crear/gestionar proyectos y tenants                │
+├─────────────────────────────────────────────────────────┤
+│  API de Autenticación (/api/v1/auth/)                   │
+│  ├── GET  /project         → JWT secret para firmar     │
+│  ├── GET  /tenant/{slug}   → Info del tenant            │
+│  ├── POST /verify          → Verificar firma JWT        │
+│  └── GET  /verify          → Verificar via Bearer       │
+└─────────────────────────────────────────────────────────┘
+                            │
+                            │ Cada proyecto SaaS consume
+                            │ esta API para:
+                            │ - Obtener JWT secret
+                            │ - Resolver tenant slugs
+                            │ - Verificar tokens
+                            ▼
+┌─────────────────────────────────────────────────────────┐
+│              TU PROYECTO SAAS                           │
+│         (Tu aplicación - maneja usuarios)               │
+├─────────────────────────────────────────────────────────┤
+│  - Almacena usuarios en TU base de datos                │
+│  - Firma JWTs con el secret de este servicio            │
+│  - Implementa login/registro de usuarios                │
+│  - Gestiona permisos y roles                            │
+└─────────────────────────────────────────────────────────┘
+```
 
-**Nota:** El panel de gestión (`/panel/`) es de uso interno. Este documento describe cómo consumir la API de autenticación desde sistemas externos.
+## Conceptos Clave
+
+- **Proyecto**: Representa tu aplicación SaaS. Contiene las credenciales (API Key, JWT Secret).
+- **Tenant**: Una instancia/cliente dentro de tu proyecto. Identificado por slug (ej: `empresa-abc`).
+- **Usuarios**: **NO se gestionan aquí**. Cada proyecto SaaS almacena sus propios usuarios.
 
 ## Documentación API
 
 - **Swagger UI:** `http://localhost:8000/docs`
 - **ReDoc:** `http://localhost:8000/redoc`
 
-## Autenticación
+## Endpoints de Autenticación
 
-Para consumir este servicio necesitas las credenciales de tu proyecto:
-- **API Key** - Para autenticación via header
-- **Client ID** y **Client Secret** - Para autenticación OAuth2
+Todos los endpoints requieren el header `X-API-Key` con la API Key de tu proyecto.
 
-### Método 1: API Key + Password
+### 1. Obtener Información del Proyecto
 
-Obtén un token JWT enviando las credenciales del usuario con tu API Key.
+Obtén el JWT secret y configuración para firmar tokens en tu aplicación.
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/auth/token \
-  -H "X-API-Key: TU_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "usuario@ejemplo.com",
-    "password": "contraseña",
-    "tenant_slug": "mi-tenant"
-  }'
+curl -X GET http://localhost:8000/api/v1/auth/project \
+  -H "X-API-Key: TU_API_KEY"
 ```
 
-**Respuesta exitosa:**
+**Respuesta:**
 ```json
 {
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "token_type": "bearer",
-  "expires_in": 1800
+  "id": "uuid-del-proyecto",
+  "name": "Mi Proyecto SaaS",
+  "slug": "mi-proyecto",
+  "tenant_strategy": "schema",
+  "jwt_secret": "tu-jwt-secret-para-firmar-tokens",
+  "jwt_algorithm": "HS256",
+  "jwt_expiration_minutes": 30
 }
 ```
 
-### Método 2: OAuth2 (Client Credentials + Password)
+### 2. Obtener Información del Tenant
 
-Alternativa usando OAuth2 estándar.
+Resuelve un slug de tenant a su ID y metadata.
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/auth/oauth/token \
-  -H "Content-Type: application/json" \
-  -d '{
-    "grant_type": "password",
-    "client_id": "TU_CLIENT_ID",
-    "client_secret": "TU_CLIENT_SECRET",
-    "username": "usuario@ejemplo.com",
-    "password": "contraseña",
-    "tenant": "mi-tenant"
-  }'
+curl -X GET http://localhost:8000/api/v1/auth/tenant/mi-tenant \
+  -H "X-API-Key: TU_API_KEY"
 ```
 
-**Respuesta exitosa:**
+**Respuesta:**
 ```json
 {
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "token_type": "bearer",
-  "expires_in": 1800
+  "id": "uuid-del-tenant",
+  "name": "Mi Tenant",
+  "slug": "mi-tenant",
+  "schema_name": "tenant_mi_tenant",
+  "is_active": true
 }
 ```
 
-### Validar Token
+### 3. Verificar Token JWT (POST)
 
-Verifica si un token es válido y obtén información del usuario.
+Verifica que un token fue firmado con el secret de tu proyecto.
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/auth/validate \
+curl -X POST http://localhost:8000/api/v1/auth/verify \
   -H "X-API-Key: TU_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-  }'
+  -d '{"token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."}'
 ```
 
 **Respuesta exitosa:**
 ```json
 {
   "valid": true,
-  "user": {
-    "id": "uuid",
+  "payload": {
+    "sub": "user-id",
     "email": "usuario@ejemplo.com",
-    "full_name": "Nombre Usuario",
-    "roles": ["admin", "user"]
+    "tenant_id": "tenant-uuid",
+    "exp": 1234567890
   },
-  "tenant": {
-    "id": "uuid",
-    "name": "Mi Tenant",
-    "slug": "mi-tenant"
-  },
-  "project": {
-    "id": "uuid",
-    "name": "Mi Proyecto",
-    "slug": "mi-proyecto"
-  }
+  "error": null
 }
 ```
 
-### Refresh Token
-
-Renueva el access token usando el refresh token.
-
-```bash
-curl -X POST http://localhost:8000/api/v1/auth/oauth/token \
-  -H "Content-Type: application/json" \
-  -d '{
-    "grant_type": "refresh_token",
-    "client_id": "TU_CLIENT_ID",
-    "client_secret": "TU_CLIENT_SECRET",
-    "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-  }'
-```
-
-## Estructura del Token JWT
-
-El token JWT contiene los siguientes claims:
-
+**Respuesta con error:**
 ```json
 {
-  "sub": "user_id",
-  "email": "usuario@ejemplo.com",
-  "tenant_id": "tenant_uuid",
-  "tenant_slug": "mi-tenant",
-  "project_id": "project_uuid",
-  "roles": ["admin", "user"],
-  "exp": 1234567890,
-  "iat": 1234567890
+  "valid": false,
+  "payload": null,
+  "error": "Invalid or expired token"
+}
+```
+
+### 4. Verificar Token JWT (GET con Bearer)
+
+Alternativa que lee el token del header Authorization.
+
+```bash
+curl -X GET http://localhost:8000/api/v1/auth/verify \
+  -H "X-API-Key: TU_API_KEY" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+## Integración en tu Aplicación SaaS
+
+### Flujo Recomendado
+
+1. **Al iniciar tu app**: Obtén el JWT secret llamando a `GET /api/v1/auth/project`
+2. **Login de usuario**: Valida credenciales en TU base de datos y firma un JWT con el secret
+3. **Requests autenticados**: Verifica el JWT localmente o usa `POST /api/v1/auth/verify`
+4. **Multi-tenancy**: Usa `GET /api/v1/auth/tenant/{slug}` para resolver slugs a IDs
+
+### Python (ejemplo completo)
+
+```python
+import requests
+import jwt
+from datetime import datetime, timedelta
+
+API_URL = "http://localhost:8000"
+API_KEY = "tu_api_key"
+
+# 1. Obtener configuración JWT del proyecto
+response = requests.get(
+    f"{API_URL}/api/v1/auth/project",
+    headers={"X-API-Key": API_KEY}
+)
+project = response.json()
+JWT_SECRET = project["jwt_secret"]
+JWT_ALGORITHM = project["jwt_algorithm"]
+JWT_EXPIRATION = project["jwt_expiration_minutes"]
+
+# 2. Cuando un usuario hace login en TU sistema
+def login_user(email: str, password: str, tenant_slug: str):
+    # Valida credenciales en TU base de datos
+    user = validate_user_in_your_db(email, password, tenant_slug)
+    if not user:
+        raise Exception("Invalid credentials")
+
+    # Firma el JWT con el secret del servicio central
+    payload = {
+        "sub": str(user.id),
+        "email": user.email,
+        "tenant_id": str(user.tenant_id),
+        "roles": user.roles,
+        "exp": datetime.utcnow() + timedelta(minutes=JWT_EXPIRATION)
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return token
+
+# 3. Verificar token (opción A: localmente)
+def verify_token_local(token: str):
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload
+    except jwt.InvalidTokenError:
+        return None
+
+# 4. Verificar token (opción B: via API)
+def verify_token_api(token: str):
+    response = requests.post(
+        f"{API_URL}/api/v1/auth/verify",
+        headers={"X-API-Key": API_KEY},
+        json={"token": token}
+    )
+    result = response.json()
+    return result["payload"] if result["valid"] else None
+
+# 5. Resolver tenant slug a ID
+def get_tenant_info(tenant_slug: str):
+    response = requests.get(
+        f"{API_URL}/api/v1/auth/tenant/{tenant_slug}",
+        headers={"X-API-Key": API_KEY}
+    )
+    return response.json()
+```
+
+### JavaScript/Node.js
+
+```javascript
+const jwt = require('jsonwebtoken');
+
+const API_URL = "http://localhost:8000";
+const API_KEY = "tu_api_key";
+
+// 1. Obtener configuración JWT
+async function getProjectConfig() {
+  const response = await fetch(`${API_URL}/api/v1/auth/project`, {
+    headers: { "X-API-Key": API_KEY }
+  });
+  return response.json();
+}
+
+// 2. Firmar JWT para un usuario
+async function createUserToken(user, projectConfig) {
+  const payload = {
+    sub: user.id,
+    email: user.email,
+    tenant_id: user.tenantId,
+    roles: user.roles
+  };
+
+  return jwt.sign(payload, projectConfig.jwt_secret, {
+    algorithm: projectConfig.jwt_algorithm,
+    expiresIn: `${projectConfig.jwt_expiration_minutes}m`
+  });
+}
+
+// 3. Verificar token via API
+async function verifyToken(token) {
+  const response = await fetch(`${API_URL}/api/v1/auth/verify`, {
+    method: "POST",
+    headers: {
+      "X-API-Key": API_KEY,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ token })
+  });
+  return response.json();
+}
+
+// 4. Obtener info del tenant
+async function getTenantInfo(tenantSlug) {
+  const response = await fetch(`${API_URL}/api/v1/auth/tenant/${tenantSlug}`, {
+    headers: { "X-API-Key": API_KEY }
+  });
+  return response.json();
 }
 ```
 
@@ -143,111 +269,61 @@ El token JWT contiene los siguientes claims:
 | Código | Descripción |
 |--------|-------------|
 | 400 | Bad Request - Datos inválidos |
-| 401 | Unauthorized - Credenciales inválidas o token expirado |
-| 403 | Forbidden - Sin permisos |
-| 404 | Not Found - Proyecto, tenant o usuario no encontrado |
+| 401 | Unauthorized - API Key inválida o proyecto inactivo |
+| 404 | Not Found - Tenant no encontrado |
 
 **Ejemplo de error:**
 ```json
 {
-  "detail": "Invalid credentials"
+  "detail": "Invalid API key"
 }
 ```
 
-## Integración en tu Aplicación
+## Panel de Gestión
 
-### Python (requests)
+El panel en `/panel/` es de **uso interno** para:
+- Crear y gestionar proyectos
+- Crear tenants dentro de cada proyecto
+- Ver credenciales (API Key, Client ID/Secret) al crear un proyecto
 
-```python
-import requests
-
-API_URL = "http://localhost:8000"
-API_KEY = "tu_api_key"
-
-# Obtener token
-response = requests.post(
-    f"{API_URL}/api/v1/auth/token",
-    headers={"X-API-Key": API_KEY},
-    json={
-        "email": "usuario@ejemplo.com",
-        "password": "contraseña",
-        "tenant_slug": "mi-tenant"
-    }
-)
-token = response.json()["access_token"]
-
-# Validar token
-response = requests.post(
-    f"{API_URL}/api/v1/auth/validate",
-    headers={"X-API-Key": API_KEY},
-    json={"token": token}
-)
-user_info = response.json()
-```
-
-### JavaScript (fetch)
-
-```javascript
-const API_URL = "http://localhost:8000";
-const API_KEY = "tu_api_key";
-
-// Obtener token
-const loginResponse = await fetch(`${API_URL}/api/v1/auth/token`, {
-  method: "POST",
-  headers: {
-    "X-API-Key": API_KEY,
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({
-    email: "usuario@ejemplo.com",
-    password: "contraseña",
-    tenant_slug: "mi-tenant"
-  })
-});
-const { access_token } = await loginResponse.json();
-
-// Validar token
-const validateResponse = await fetch(`${API_URL}/api/v1/auth/validate`, {
-  method: "POST",
-  headers: {
-    "X-API-Key": API_KEY,
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({ token: access_token })
-});
-const userInfo = await validateResponse.json();
-```
-
-## Ejecutar con Docker
+## Ejecutar Localmente
 
 ```bash
 # Clonar repositorio
 git clone https://github.com/Gabriel-Barria/gestion_saas.git
 cd gestion_saas
 
-# Iniciar servicios
-docker-compose up -d
+# Crear entorno virtual
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# o: venv\Scripts\activate  # Windows
 
-# Ver logs
-docker-compose logs -f app
+# Instalar dependencias
+pip install -r requirements.txt
+
+# Configurar variables de entorno
+cp .env.example .env
+# Editar .env con tus valores
+
+# Aplicar migraciones
+alembic upgrade head
+
+# Iniciar servidor
+uvicorn app.main:app --reload
 ```
-
-El servicio estará disponible en:
-- API: `http://localhost:8000`
-- Documentación: `http://localhost:8000/docs`
 
 ## Variables de Entorno
 
-| Variable | Descripción | Default |
-|----------|-------------|---------|
-| DATABASE_URL | URL de conexión PostgreSQL | - |
-| SECRET_KEY | Clave secreta para sesiones | - |
-| ADMIN_EMAIL | Email del admin del panel | - |
-| ADMIN_PASSWORD | Password del admin del panel | - |
+| Variable | Descripción | Requerido |
+|----------|-------------|-----------|
+| DATABASE_URL | URL de conexión PostgreSQL | Si |
+| SECRET_KEY | Clave secreta para sesiones | Si |
+| ADMIN_EMAIL | Email del admin del panel | Si |
+| ADMIN_PASSWORD | Password del admin del panel | Si |
 
-## Tecnologías
+## Tecnologias
 
 - **Python 3.12** + **FastAPI**
 - **PostgreSQL 15** + **SQLAlchemy 2.0**
 - **JWT** (python-jose)
-- **Docker** + **Docker Compose**
+- **Alembic** (migraciones)

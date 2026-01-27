@@ -4,83 +4,102 @@ from fastapi import APIRouter, Header
 
 from app.api.deps import AuthServiceDep, ApiKeyDep
 from app.schemas.auth import (
-    TokenRequest,
-    OAuthTokenRequest,
-    TokenResponse,
-    TokenValidationRequest,
-    TokenValidationResponse,
+    JWTVerifyRequest,
+    JWTVerifyResponse,
+    ProjectInfoResponse,
+    TenantInfoResponse,
 )
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 
-@router.post("/token", response_model=TokenResponse)
-async def get_token_with_api_key(
-    data: TokenRequest,
+@router.get("/project", response_model=ProjectInfoResponse)
+async def get_project_info(
     api_key: ApiKeyDep,
     service: AuthServiceDep,
 ):
     """
-    Get an access token using API Key authentication.
+    Get project information including JWT secret for signing tokens.
 
-    The API key must be sent in the X-API-Key header.
-    Provide email, password, and tenant_slug in the request body.
+    **Use this endpoint to get your project's JWT configuration.**
+
+    The API key must be sent in the `X-API-Key` header.
+
+    Returns:
+    - Project ID, name, slug
+    - JWT secret (for signing tokens in your SaaS)
+    - JWT algorithm and expiration settings
     """
-    return await service.authenticate_with_api_key(api_key, data)
+    project = await service.get_project_by_api_key(api_key)
+    return ProjectInfoResponse.model_validate(project)
 
 
-@router.post("/oauth/token", response_model=TokenResponse)
-async def get_token_oauth(
-    data: OAuthTokenRequest,
-    service: AuthServiceDep,
-):
-    """
-    Get an access token using OAuth2 client credentials.
-
-    Supported grant types:
-    - `password`: Exchange username/password for tokens. Requires: username, password, tenant
-    - `refresh_token`: Exchange a refresh token for new tokens. Requires: refresh_token
-    """
-    return await service.authenticate_with_oauth(data)
-
-
-@router.post("/validate", response_model=TokenValidationResponse)
-async def validate_token(
-    data: TokenValidationRequest,
+@router.get("/tenant/{tenant_slug}", response_model=TenantInfoResponse)
+async def get_tenant_info(
+    tenant_slug: str,
     api_key: ApiKeyDep,
     service: AuthServiceDep,
 ):
     """
-    Validate a JWT token.
+    Get tenant information by slug.
 
-    The API key must be sent in the X-API-Key header to identify the project.
-    Returns token validity and decoded user information.
+    **Use this endpoint to resolve a tenant slug to its ID and metadata.**
+
+    The API key must be sent in the `X-API-Key` header to identify your project.
+
+    Returns:
+    - Tenant ID, name, slug
+    - Schema name (if using schema isolation)
+    - Active status
     """
-    return await service.validate_token(data.token, api_key)
+    return await service.get_tenant_info(api_key, tenant_slug)
 
 
-@router.get("/validate", response_model=TokenValidationResponse)
-async def validate_token_bearer(
+@router.post("/verify", response_model=JWTVerifyResponse)
+async def verify_jwt(
+    data: JWTVerifyRequest,
+    api_key: ApiKeyDep,
+    service: AuthServiceDep,
+):
+    """
+    Verify a JWT signature.
+
+    **Use this endpoint to verify tokens were signed with your project's secret.**
+
+    The API key must be sent in the `X-API-Key` header to identify your project.
+
+    This only verifies the signature is valid and the token is not expired.
+    It does NOT verify the user exists (that's your SaaS's responsibility).
+
+    Returns:
+    - valid: boolean
+    - payload: decoded JWT payload if valid
+    - error: error message if invalid
+    """
+    return await service.verify_jwt(api_key, data.token)
+
+
+@router.get("/verify", response_model=JWTVerifyResponse)
+async def verify_jwt_bearer(
     api_key: ApiKeyDep,
     service: AuthServiceDep,
     authorization: Annotated[str | None, Header()] = None,
 ):
     """
-    Validate a JWT token from Authorization header.
+    Verify a JWT from Authorization header.
 
-    The API key must be sent in the X-API-Key header.
-    The JWT must be sent in the Authorization header as: Bearer <token>
+    **Alternative to POST /verify - reads token from Authorization header.**
+
+    Headers required:
+    - `X-API-Key`: Your project's API key
+    - `Authorization`: Bearer <token>
     """
     if not authorization:
-        return TokenValidationResponse(
-            valid=False, message="Authorization header is required"
-        )
+        return JWTVerifyResponse(valid=False, error="Authorization header is required")
 
     parts = authorization.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
-        return TokenValidationResponse(
-            valid=False, message="Invalid Authorization header format"
-        )
+        return JWTVerifyResponse(valid=False, error="Invalid Authorization header format. Use: Bearer <token>")
 
     token = parts[1]
-    return await service.validate_token(token, api_key)
+    return await service.verify_jwt(api_key, token)
