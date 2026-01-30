@@ -21,10 +21,12 @@ services:
     container_name: gestion_saas_app
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/gestion_saas
-      - SECRET_KEY=super-secret-key-change-in-production
+      - SECRET_KEY=dev-secret-key-only-for-local-testing
       - ADMIN_EMAIL=admin@gestion-saas.com
       - ADMIN_PASSWORD=admin123
       - DEBUG=true
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:5173,http://localhost:8000
+      - RATE_LIMIT_PER_MINUTE=60
     ports:
       - "8000:8000"
     depends_on:
