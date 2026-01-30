@@ -1,12 +1,26 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from app.config import settings
 from app.api.v1.router import api_router
 from app.admin.routes import router as panel_router
+
+# Rate limiter instance
+limiter = Limiter(key_func=get_remote_address)
+
+
+def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Too many requests. Please try again later."},
+    )
 
 
 @asynccontextmanager
@@ -64,13 +78,18 @@ Body: { "token": "<jwt_token>" }
     lifespan=lifespan,
 )
 
+# Rate limiter state
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
 # Session middleware (required for admin panel)
 app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
 
-# CORS middleware
+# CORS middleware with configured origins
+cors_origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

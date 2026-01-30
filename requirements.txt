@@ -23,3 +23,6 @@ python-slugify>=8.0.1
 # Admin Panel
 sqladmin>=0.16.0
 itsdangerous>=2.1.0
+
+# Rate limiting
+slowapi>=0.1.9

@@ -1,8 +1,13 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.api.deps import AuthServiceDep, MembershipServiceDep, ApiKeyDep
+from app.config import settings
+
+limiter = Limiter(key_func=get_remote_address)
 from app.schemas.auth import (
     JWTVerifyRequest,
     JWTVerifyResponse,
@@ -116,7 +121,9 @@ async def verify_jwt_bearer(
 # === Global Authentication Endpoints ===
 
 @router.post("/register", response_model=RegisterResponse)
+@limiter.limit(f"{settings.RATE_LIMIT_PER_MINUTE}/minute")
 async def register(
+    request: Request,
     data: RegisterRequest,
     service: AuthServiceDep,
 ):
@@ -136,7 +143,9 @@ async def register(
 
 
 @router.post("/login", response_model=LoginResponse)
+@limiter.limit(f"{settings.RATE_LIMIT_PER_MINUTE}/minute")
 async def login_global(
+    request: Request,
     data: LoginRequest,
     service: AuthServiceDep,
 ):
@@ -156,7 +165,9 @@ async def login_global(
 
 
 @router.post("/login/tenant", response_model=TokenResponse)
+@limiter.limit(f"{settings.RATE_LIMIT_PER_MINUTE}/minute")
 async def login_tenant(
+    request: Request,
     data: LoginTenantRequest,
     service: AuthServiceDep,
 ):
@@ -181,7 +192,9 @@ async def login_tenant(
 
 
 @router.post("/refresh", response_model=TokenResponse)
+@limiter.limit(f"{settings.RATE_LIMIT_PER_MINUTE}/minute")
 async def refresh_token(
+    request: Request,
     data: RefreshRequest,
     service: AuthServiceDep,
     x_api_key: Annotated[str | None, Header()] = None,
@@ -238,7 +251,9 @@ async def get_invitation_info(
 
 
 @router.post("/invitations/accept")
+@limiter.limit(f"{settings.RATE_LIMIT_PER_MINUTE}/minute")
 async def accept_invitation(
+    request: Request,
     data: InvitationAccept,
     membership_service: MembershipServiceDep,
 ):
